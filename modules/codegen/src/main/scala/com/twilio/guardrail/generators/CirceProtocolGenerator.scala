@@ -201,49 +201,20 @@ object CirceProtocolGenerator {
           param => discriminatorNames.contains(param.name)
         )
         val readOnlyKeys: List[String] = params.flatMap(_.readOnlyKey).toList
-        val paramCount                 = params.length
         val typeName                   = Type.Name(clsName)
-        val encVal = if (paramCount == 1) {
-          val (names, fields): (List[Lit], List[Term.Name]) = params
-            .map(param => (Lit.String(param.name), Term.Name(param.term.name.value)))
-            .to[List]
-            .unzip
-          val List(name)  = names
-          val List(field) = fields
-          q"""
-            Encoder.forProduct1(${name})((o: ${Type.Name(clsName)}) => o.${field})
-          """
-        } else if (paramCount >= 2 && paramCount <= 22) {
-          val (names, fields): (List[Lit], List[Term.Name]) = params
-            .map(param => (Lit.String(param.name), Term.Name(param.term.name.value)))
-            .to[List]
-            .unzip
-          val tupleFields = fields
-            .map({ field =>
-              Term.Select(Term.Name("o"), field)
-            })
-            .to[List]
-
-          val unapply: Term.Function = Term.Function(
-            List(param"o: ${Type.Name(clsName)}"),
-            Term.Tuple(tupleFields)
-          )
-          q"""
-            Encoder.${Term.Name(s"forProduct${paramCount}")}(..${names})(${unapply})
-          """
-        } else {
+        val encVal = {
           val pairs: List[Term.Tuple] = params
             .map(param => q"""(${Lit.String(param.name)}, a.${Term.Name(param.term.name.value)}.asJson)""")
             .to[List]
           q"""
-            new ObjectEncoder[${Type.Name(clsName)}] {
+            new ObjectEncoder[$typeName] {
               final def encodeObject(a: ${Type
             .Name(clsName)}): JsonObject = JsonObject.fromIterable(Vector(..${pairs}))
             }
           """
         }
         Target.pure(Some(q"""
-          implicit val ${suffixClsName("encode", clsName)}: ObjectEncoder[${Type.Name(clsName)}] = {
+          implicit val ${suffixClsName("encode", clsName)}: ObjectEncoder[$typeName] = {
             val readOnlyKeys = Set[String](..${readOnlyKeys.map(Lit.String(_))})
             $encVal.mapJsonObject(_.filterKeys(key => !(readOnlyKeys contains key)))
           }
@@ -255,18 +226,8 @@ object CirceProtocolGenerator {
         val params = (parents.reverse.flatMap(_.params) ++ selfParams).filterNot(
           param => discriminatorNames.contains(param.name)
         )
-        val needsEmptyToNull: Boolean = params.exists(_.emptyToNull == EmptyIsNull)
-        val paramCount                = params.length
         for {
-          decVal <- if (paramCount <= 22 && !needsEmptyToNull) {
-            val names: List[Lit] = params.map(_.name).map(Lit.String(_)).to[List]
-            Target.pure(
-              q"""
-                Decoder.${Term.Name(s"forProduct${paramCount}")}(..${names})(${Term
-                .Name(clsName)}.apply _)
-              """
-            )
-          } else {
+          decVal <- {
             params
               .traverse({ param =>
                 for {
